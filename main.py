@@ -11,7 +11,6 @@ API_URL = "https://gurge44.pythonanywhere.com/get-all-lobbies-json"
 TARGET_HOST = "ARIJIT18"
 
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
-
 COOKIE_VALUE = os.getenv("SITE_COOKIE")
 
 HEADERS = {
@@ -21,69 +20,82 @@ HEADERS = {
     "Cookie": COOKIE_VALUE
 }
 
+# ✅ prevent repeating same code
+last_sent_code = None
+
+
 def send_to_discord(message):
     try:
-        r = requests.post(WEBHOOK_URL, json={"content": message}, timeout=10)
+        payload = {"content": f"@everyone\n{message}"}
+        r = requests.post(WEBHOOK_URL, json=payload, timeout=10)
         print("✅ Discord Response:", r.status_code)
     except Exception as e:
         print("❌ Webhook Error:", e)
 
+
 def fetch_lobbies_loop():
-    print("\n=== FETCH LOOP STARTED ===")
+    global last_sent_code
+
+    print("\n=== FETCH LOOP STARTED ✅ ===")
 
     while True:
         try:
             r = requests.get(API_URL, headers=HEADERS, timeout=10)
-
             raw = r.text
-            print("\nRAW RESPONSE (first 200 chars):")
-            print(raw[:200])
+            print("\nRAW RESPONSE (first 150 chars):", raw[:150])
 
             data = r.json()
-
             if not data:
                 print("❌ No lobbies found.")
                 time.sleep(5)
                 continue
 
-            found_my_lobby = False
-
-            print("\n✅ LIST OF ALL LOBBIES:")
+            print("\n✅ CHECKING ALL LOBBIES...")
             print("------------------------------------")
 
-            # ✅ LOOP THROUGH *EVERY* LOBBY
-            for code, info in data.items():
-                print(f"Code: {code}")
-                print("Host:", info.get("host_name"))
-                print("Players:", info.get("players"))
-                print("Status:", info.get("status"))
-                print("Server:", info.get("server_name"))
-                print("Version:", info.get("version"))
-                print("------------------------------------")
+            my_lobby_found = False
+            found_code = None
 
-                # ✅ CHECK IF THIS IS YOUR LOBBY
-                if info.get("host_name") == TARGET_HOST:
-                    found_my_lobby = True
+            # ✅ loop every lobby
+            for code, info in data.items():
+                host = info.get("host_name")
+                print(f"Code={code} | Host={host} | Players={info.get('players')}")
+
+                # ✅ check if this is your lobby
+                if host == TARGET_HOST:
+                    my_lobby_found = True
+                    found_code = code
+
+            # ✅ if your lobby is found
+            if my_lobby_found:
+                print(f"\n✅ Your Lobby Found: {found_code}")
+
+                # ✅ send only if code is NEW
+                if found_code != last_sent_code:
+                    print("✅ NEW CODE DETECTED → Sending to Discord")
+                    last_sent_code = found_code  # update memory
+
                     message = (
-                        f"✅ **Your Lobby Found!**\n"
-                        f"Code: **{code}**\n"
-                        f"Server: {info.get('server_name')}\n"
-                        f"Players: {info.get('players')}\n"
-                        f"Status: {info.get('status')}"
+                        f"✅ **Your Among Us Lobby is LIVE!**\n"
+                        f"**Join Code:** `{found_code}`\n"
+                        f"Host: {TARGET_HOST}"
                     )
                     send_to_discord(message)
-
-            if not found_my_lobby:
+                else:
+                    print("🔁 Same code as before → No Discord spam.")
+            else:
                 print("❌ Your lobby not found this cycle.")
 
         except Exception as e:
-            print("❌ Fetch Error:", e)
+            print("❌ ERROR:", e)
 
         time.sleep(5)
+
 
 @app.route("/")
 def home():
     return "AutoPing alive ✅"
+
 
 threading.Thread(target=fetch_lobbies_loop, daemon=True).start()
 
