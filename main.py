@@ -32,4 +32,4 @@ print("=== Fetch Test Started ===")
 
 while True:
     fetch_latest_lobby()
-    time.sleep(10)   # fetch every 10 seconds
+    time.sleep(5)   # fetch every 10 seconds
