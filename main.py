@@ -4,7 +4,7 @@ from flask import Flask
 
 app = Flask(__name__)
 
-WEBHOOK = os.getenv("https://discordapp.com/api/webhooks/1436023355353600031/6VYyhrMeMSVk7H2AVczTI3UyI94GtBdUhdLqpp8HT3qF0s0QEOA--oJQL2VB98cD33p1")  # put your webhook in Render env variable
+WEBHOOK = os.getenv("DISCORD_WEBHOOK")  # put your webhook in Render env variable
 
 @app.route("/")
 def home():
