@@ -18,7 +18,7 @@ STATE_FILE = "last_seen.json"
 # ==============================
 # FLASK SERVER (Keepalive)
 # ==============================
-app = Flask(_name_)
+app = Flask(__name__)
 
 @app.get("/")
 def home():
