@@ -6,7 +6,7 @@ from flask import Flask
 
 app = Flask(__name__)
 
-API_URL = "https://gurge44.pythonanywhere.com/get-all-lobbies.json"
+API_URL = "https://gurge44.pythonanywhere.com/get-all-lobbies-json"
 
 # ✅ Load your cookie from Render environment
 COOKIE = os.getenv("GURGE_COOKIE", "")
