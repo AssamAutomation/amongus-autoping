@@ -13,7 +13,7 @@ from flask import Flask
 # ==============================
 TARGET_URL = "https://gurge44.pythonanywhere.com/lobbies"
 HOST_NAME = "ARIJIT18"        # your host name in-game
-WEBHOOK = os.getenv("DISCORD_WEBHOOK")
+WEBHOOK = os.getenv("https://discordapp.com/api/webhooks/1436023355353600031/6VYyhrMeMSVk7H2AVczTI3UyI94GtBdUhdLqpp8HT3qF0s0QEOA--oJQL2VB98cD33p1")
 POLL_SEC = 5
 STATE_FILE = "last_seen.json"
 
