@@ -5,37 +5,38 @@ import threading
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask
-# fix refresh
-# force redeploy 2
-# force build 3
-# ==============================
-# CONFIG
-# ==============================
-TARGET_URL = "https://gurge44.pythonanywhere.com/lobbies"
-HOST_NAME = "ARIJIT18"        # your host name in-game
-WEBHOOK = os.getenv("https://discordapp.com/api/webhooks/1436023355353600031/6VYyhrMeMSVk7H2AVczTI3UyI94GtBdUhdLqpp8HT3qF0s0QEOA--oJQL2VB98cD33p1")
-POLL_SEC = 5
-STATE_FILE = "last_seen.json"
 
-# ==============================
+# ============================
+# CONFIG
+# ============================
+
+TARGET_URL = "https://gurge44.pythonanywhere.com/lobbies"  # ✅ correct lobby site
+WEBHOOK = os.getenv("https://discordapp.com/api/webhooks/1436023355353600031/6VYyhrMeMSVk7H2AVczTI3UyI94GtBdUhdLqpp8HT3qF0s0QEOA--oJQL2VB98cD33p1")   # ✅ stored in Render environment variable
+POLL_SEC = 5
+STATE_FILE = "last_state.json"
+
+# ============================
 # FLASK SERVER (Keepalive)
-# ==============================
+# ============================
+
 app = Flask(__name__)
 
-@app.get("/")
+@app.route("/")
 def home():
     return "AutoPing alive"
 
 
-# ==============================
-# STATE FUNCTIONS
-# ==============================
+# ============================
+# STATE SAVE / LOAD
+# ============================
+
 def load_state():
     try:
         with open(STATE_FILE, "r") as f:
             return json.load(f)
     except:
-        return {"last_code": None, "last_status": None}
+        return {"last_lobbies": []}
+
 
 def save_state(state):
     try:
@@ -45,100 +46,107 @@ def save_state(state):
         pass
 
 
-# ==============================
-# SCRAPING
-# ==============================
-def clean_code_cell(td):
-    txt = " ".join(td.stripped_strings)
-    return txt.replace("Copy", "").strip()
+# ============================
+# SCRAPING ALL LOBBIES
+# ============================
 
-def scrape_lobby():
-    r = requests.get(TARGET_URL, timeout=15)
-    soup = BeautifulSoup(r.text, "html.parser")
+def scrape_lobbies():
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        resp = requests.get(TARGET_URL, headers=headers, timeout=15)
+        soup = BeautifulSoup(resp.text, "html.parser")
 
-    table = soup.find("table")
-    if not table:
-        return None
+        table = soup.find("table")
+        if not table:
+            print("No table found on website.")
+            return []
 
-    headers = [th.get_text(strip=True) for th in table.find_all("th")]
-    idx = {h: i for i, h in enumerate(headers)}
+        lobbies = []
+        rows = table.find_all("tr")[1:]   # skip header row
 
-    for tr in table.find_all("tr"):
-        tds = tr.find_all("td")
-        if not tds:
-            continue
+        for r in rows:
+            cols = [c.text.strip() for c in r.find_all("td")]
+            if len(cols) < 3:
+                continue
 
-        host = tr.find_all("td")[idx["Host"]].get_text(strip=True)
-        if host.lower() == HOST_NAME.lower():
-            code = clean_code_cell(tr.find_all("td")[idx["Room Code"]])
-            server = tr.find_all("td")[idx["Server"]].get_text(strip=True)
-            map_ = tr.find_all("td")[idx["Map"]].get_text(strip=True)
-            status = tr.find_all("td")[idx["Status"]].get_text(strip=True)
+            lobby_code = cols[0]
+            host = cols[1]
+            status = cols[-1]
 
-            return {
-                "code": code,
-                "server": server,
-                "map": map_,
-                "status": status,
-                "host": host
-            }
-    return None
+            lobbies.append({
+                "code": lobby_code,
+                "host": host,
+                "status": status
+            })
+
+        return lobbies
+
+    except Exception as e:
+        print("Scraping error:", e)
+        return []
 
 
-# ==============================
-# WEBHOOK
-# ==============================
-def send_webhook(info):
+# ============================
+# SEND MESSAGE TO WEBHOOK
+# ============================
+
+def send_webhook(msg):
     if not WEBHOOK:
-        print("ERROR: DISCORD_WEBHOOK is missing")
+        print("Webhook missing!")
         return
 
-    payload = {
-        "content": "@everyone",
-        "embeds": [{
-            "title": f"Among Us Lobby: {info['code']}",
-            "description": f"Host: *{info['host']}*",
-            "fields": [
-                {"name": "Server", "value": info["server"], "inline": True},
-                {"name": "Map", "value": info["map"], "inline": True},
-                {"name": "Status", "value": info["status"], "inline": True}
-            ],
-            "footer": {"text": "AutoPing • gurge44.pythonanywhere.com/lobbies"},
-            "color": 0x43B581
-        }]
+    data = {
+        "content": msg
     }
 
     try:
-        requests.post(WEBHOOK, json=payload, timeout=10)
-        print("Ping sent for", info["code"])
+        requests.post(WEBHOOK, json=data)
+        print("Ping sent:", msg)
     except Exception as e:
         print("Webhook error:", e)
 
 
-# ==============================
-# WORKER LOOP
-# ==============================
-def worker():
+# ============================
+# PROCESS LOBBIES
+# ============================
+
+def process_lobbies():
     state = load_state()
+    old = state["last_lobbies"]
 
+    lobbies = scrape_lobbies()
+    if not lobbies:
+        print("No lobbies found")
+        return
+
+    # Only send new lobbies that were not in the last cycle
+    new_lobbies = [x for x in lobbies if x not in old]
+
+    for lob in new_lobbies:
+        msg = f"✅ **Lobby Found!**\nCode: **{lob['code']}**  |  Host: **{lob['host']}**  |  Status: {lob['status']}"
+        send_webhook(msg)
+
+    state["last_lobbies"] = lobbies
+    save_state(state)
+
+
+# ============================
+# LOOP THREAD
+# ============================
+
+def poll_loop():
     while True:
-        try:
-            info = scrape_lobby()
-            if info:
-                code_changed = info["code"] != state.get("last_code")
-                status_changed = info["status"] != state.get("last_status")
-
-                if code_changed or (status_changed and info["status"].lower() == "open"):
-                    send_webhook(info)
-                    state["last_code"] = info["code"]
-                    state["last_status"] = info["status"]
-                    save_state(state)
-
-        except Exception as e:
-            print("Loop error:", e)
-
+        process_lobbies()
         time.sleep(POLL_SEC)
 
 
-# ✅ Start worker thread ALWAYS (Gunicorn compatible)
-threading.Thread(target=worker, daemon=True).start()
+# Start scraper thread as soon as app loads (Gunicorn safe)
+threading.Thread(target=poll_loop, daemon=True).start()
+
+
+# ============================
+# RUN LOCAL (ignored on Render)
+# ============================
+
+if __name__ == "__main__":
+    app.run()
