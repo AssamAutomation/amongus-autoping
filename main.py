@@ -1,5 +1,9 @@
 import time
+import threading
 import requests
+from flask import Flask
+
+app = Flask(__name__)
 
 API_URL = "https://gurge44.pythonanywhere.com/get-all-lobbies.json"
 
@@ -12,7 +16,6 @@ def fetch_latest_lobby():
             print("❌ No lobby data found.")
             return
 
-        # Get first lobby (latest)
         first_code = list(data.keys())[0]
         lobby = data[first_code]
 
@@ -28,8 +31,15 @@ def fetch_latest_lobby():
     except Exception as e:
         print("❌ Error fetching lobby:", e)
 
-print("=== Fetch Test Started ===")
+def loop_thread():
+    print("=== Background loop started ===")
+    while True:
+        fetch_latest_lobby()
+        time.sleep(10)
 
-while True:
-    fetch_latest_lobby()
-    time.sleep(5)   # fetch every 10 seconds
+@app.route("/")
+def home():
+    return "Service is running ✅"
+
+# Start loop thread before Flask starts
+threading.Thread(target=loop_thread, daemon=True).start()
