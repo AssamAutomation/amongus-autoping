@@ -3,21 +3,20 @@ import time
 import json
 import threading
 import requests
-from bs4 import BeautifulSoup
 from flask import Flask
 
-# ============================
+# =============================
 # CONFIG
-# ============================
+# =============================
 
-TARGET_URL = "https://gurge44.pythonanywhere.com/lobbies"  # ✅ correct lobby site
-WEBHOOK = os.getenv("https://discordapp.com/api/webhooks/1436023355353600031/6VYyhrMeMSVk7H2AVczTI3UyI94GtBdUhdLqpp8HT3qF0s0QEOA--oJQL2VB98cD33p1")   # ✅ stored in Render environment variable
+API_URL = "https://gurg44.pythonanywhere.com/get-all-lobbies.json"
+WEBHOOK = os.getenv("DISCORD_WEBHOOK")
 POLL_SEC = 5
 STATE_FILE = "last_state.json"
 
-# ============================
-# FLASK SERVER (Keepalive)
-# ============================
+# =============================
+# FLASK KEEPALIVE SERVER
+# =============================
 
 app = Flask(__name__)
 
@@ -25,18 +24,16 @@ app = Flask(__name__)
 def home():
     return "AutoPing alive"
 
-
-# ============================
-# STATE SAVE / LOAD
-# ============================
+# =============================
+# STATE LOAD/SAVE
+# =============================
 
 def load_state():
     try:
         with open(STATE_FILE, "r") as f:
             return json.load(f)
     except:
-        return {"last_lobbies": []}
-
+        return {"last": []}
 
 def save_state(state):
     try:
@@ -45,108 +42,75 @@ def save_state(state):
     except:
         pass
 
+# =============================
+# FETCH LOBBIES FROM API
+# =============================
 
-# ============================
-# SCRAPING ALL LOBBIES
-# ============================
-
-def scrape_lobbies():
+def fetch_lobbies():
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
-        resp = requests.get(TARGET_URL, headers=headers, timeout=15)
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        table = soup.find("table")
-        if not table:
-            print("No table found on website.")
-            return []
-
-        lobbies = []
-        rows = table.find_all("tr")[1:]   # skip header row
-
-        for r in rows:
-            cols = [c.text.strip() for c in r.find_all("td")]
-            if len(cols) < 3:
-                continue
-
-            lobby_code = cols[0]
-            host = cols[1]
-            status = cols[-1]
-
-            lobbies.append({
-                "code": lobby_code,
-                "host": host,
-                "status": status
-            })
-
-        return lobbies
-
+        resp = requests.get(API_URL, headers=headers, timeout=10)
+        data = resp.json()
+        return data    # data is already a list of lobbies
     except Exception as e:
-        print("Scraping error:", e)
+        print("API fetch error:", e)
         return []
 
-
-# ============================
-# SEND MESSAGE TO WEBHOOK
-# ============================
+# =============================
+# SEND WEBHOOK
+# =============================
 
 def send_webhook(msg):
     if not WEBHOOK:
-        print("Webhook missing!")
+        print("No webhook set!")
         return
-
-    data = {
-        "content": msg
-    }
-
     try:
-        requests.post(WEBHOOK, json=data)
-        print("Ping sent:", msg)
+        requests.post(WEBHOOK, json={"content": msg})
+        print("Sent:", msg)
     except Exception as e:
         print("Webhook error:", e)
 
-
-# ============================
-# PROCESS LOBBIES
-# ============================
+# =============================
+# PROCESS NEW LOBBIES
+# =============================
 
 def process_lobbies():
     state = load_state()
-    old = state["last_lobbies"]
+    old_list = state["last"]
 
-    lobbies = scrape_lobbies()
-    if not lobbies:
-        print("No lobbies found")
+    new_list = fetch_lobbies()
+    if not new_list:
+        print("No data found.")
         return
 
-    # Only send new lobbies that were not in the last cycle
-    new_lobbies = [x for x in lobbies if x not in old]
+    # detect only new lobbies
+    fresh = [lob for lob in new_list if lob not in old_list]
 
-    for lob in new_lobbies:
-        msg = f"✅ **Lobby Found!**\nCode: **{lob['code']}**  |  Host: **{lob['host']}**  |  Status: {lob['status']}"
+    for lob in fresh:
+        msg = (
+            f"✅ **New Lobby Found!**\n"
+            f"Code: **{lob['code']}**\n"
+            f"Host: **{lob['host']}**\n"
+            f"Map: **{lob['map']}**\n"
+            f"Status: {lob['status']}\n"
+        )
         send_webhook(msg)
 
-    state["last_lobbies"] = lobbies
+    state["last"] = new_list
     save_state(state)
 
-
-# ============================
-# LOOP THREAD
-# ============================
+# =============================
+# POLLING LOOP
+# =============================
 
 def poll_loop():
     while True:
         process_lobbies()
         time.sleep(POLL_SEC)
 
-
-# Start scraper thread as soon as app loads (Gunicorn safe)
+# start background thread (works in gunicorn)
 threading.Thread(target=poll_loop, daemon=True).start()
 
-
-# ============================
-# RUN LOCAL (ignored on Render)
-# ============================
-
+# Run local
 if __name__ == "__main__":
     app.run()
