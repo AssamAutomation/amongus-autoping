@@ -30,10 +30,10 @@ session.headers.update(HEADERS)
 
 def fetch_latest_lobby():
     try:
+        print("FETCHING...")
         r = session.get(API_URL, timeout=12)
 
-        print("RAW RESPONSE (first 200 chars):")
-        print(r.text[:200])
+        print("RAW =", r.text[:200])  # <--- VERY IMPORTANT
 
         data = r.json()   # ✅ This will work only if cookie is correct
 
