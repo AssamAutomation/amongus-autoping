@@ -6,35 +6,34 @@ import requests
 from bs4 import BeautifulSoup
 from flask import Flask
 
-# ==============================
-# CONFIGURATION
-# ==============================
+# ===================================================
+# CONFIG
+# ===================================================
 TARGET_URL = "https://gurge44.pythonanywhere.com/lobbies"
 HOST_NAME  = "ARIJIT18"
 WEBHOOK    = os.getenv("DISCORD_WEBHOOK")
 POLL_SEC   = 5
 STATE_FILE = "last_seen.json"
 
-# ==============================
-# FLASK APP (keepalive server)
-# ==============================
-app = Flask(_name_)
+# ===================================================
+# FLASK APP (Keepalive)
+# ===================================================
+app = Flask(__name__)
 
 @app.get("/")
 def home():
     return "AutoPing alive"
 
 
-# ==============================
-# STATE LOADING + SAVING
-# ==============================
+# ===================================================
+# LOAD / SAVE STATE
+# ===================================================
 def load_state():
     try:
         with open(STATE_FILE, "r") as f:
             return json.load(f)
     except:
         return {"last_code": None, "last_status": None}
-
 
 def save_state(s):
     try:
@@ -44,18 +43,20 @@ def save_state(s):
         pass
 
 
-# ==============================
-# SCRAPING FUNCTION
-# ==============================
+# ===================================================
+# SCRAPER
+# ===================================================
 def clean_code_cell(td):
     txt = " ".join(td.stripped_strings)
     return txt.replace("Copy", "").strip()
 
-
 def scrape_lobby():
-    r = requests.get(TARGET_URL, timeout=15)
-    soup = BeautifulSoup(r.text, "html.parser")
+    try:
+        r = requests.get(TARGET_URL, timeout=10)
+    except:
+        return None
 
+    soup = BeautifulSoup(r.text, "html.parser")
     table = soup.find("table")
     if not table:
         return None
@@ -87,19 +88,19 @@ def scrape_lobby():
     return None
 
 
-# ==============================
-# WEBHOOK SEND
-# ==============================
+# ===================================================
+# SEND WEBHOOK
+# ===================================================
 def send_webhook(info):
     if not WEBHOOK:
-        print("DISCORD_WEBHOOK missing!")
+        print("ERROR: DISCORD_WEBHOOK is missing")
         return
 
     payload = {
         "content": "@everyone",
         "embeds": [{
             "title": f"Among Us Lobby: {info['code']}",
-            "description": f"Host: *{info['host']}*",
+            "description": f"Host: **{info['host']}**",
             "fields": [
                 {"name": "Server", "value": info["server"], "inline": True},
                 {"name": "Map", "value": info["map"], "inline": True},
@@ -112,14 +113,14 @@ def send_webhook(info):
 
     try:
         requests.post(WEBHOOK, json=payload, timeout=10)
-        print(f"Ping sent for {info['code']}")
+        print("✅ Ping sent for", info["code"])
     except Exception as e:
         print("Webhook error:", e)
 
 
-# ==============================
+# ===================================================
 # BACKGROUND WORKER (MAIN LOOP)
-# ==============================
+# ===================================================
 def worker():
     state = load_state()
 
@@ -142,6 +143,7 @@ def worker():
         time.sleep(POLL_SEC)
 
 
-# ✅ ✅ IMPORTANT ✅ ✅  
-# START THE WORKER AUTOMATICALLY (GUNICORN COMPATIBLE)
+# ===================================================
+# 🔥 ALWAYS START WORKER (GUNICORN COMPATIBLE)
+# ===================================================
 threading.Thread(target=worker, daemon=True).start()
