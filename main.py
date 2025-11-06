@@ -98,4 +98,3 @@ def worker():
         time.sleep(POLL_SEC)
 
     threading.Thread(target=worker, daemon=True).start()
-    worker()
