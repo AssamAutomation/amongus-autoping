@@ -12,7 +12,7 @@ app = Flask(__name__)
 # CONFIG
 # ==============================
 API_URL = "https://gurge44.pythonanywhere.com/get-all-lobbies-json"
-HOST_NAME = "ARIJIT18"
+HOST_NAME = "ARIJITHOST"
 
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
 COOKIE_DATA = os.getenv("SITE_COOKIE")
