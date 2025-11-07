@@ -27,7 +27,6 @@ HEADERS = {
 last_code = None
 last_status = None
 
-
 # ==============================
 # ✅ AUTO DELETE MSG AFTER 2 MINS
 # ==============================
@@ -50,13 +49,15 @@ def send_embed(event_title, code, lobby, extra_message=""):
 
     embed = {
         "title": event_title,
-        "color": 0xF7E7A6,   # Light creamy yellow
+        "color": 0xF7E7A6,
         "thumbnail": {"url": thumb_url},
         "image": {"url": banner_url},
         "fields": [
             {
-                "name": "🎮 JOIN CODE (Tap to Copy)", "value": lobby.get("code", "-"), "inline": True},
-            
+                "name": "🎮 JOIN CODE (Tap to Copy)",
+                "value": f"```\n{code}\n```",
+                "inline": False
+            },
             {"name": "👤 Host", "value": lobby.get("host_name", "-"), "inline": True},
             {"name": "🌍 Server", "value": lobby.get("server_name", "-"), "inline": True},
             {"name": "👥 Players", "value": str(lobby.get("players", "-")), "inline": True},
@@ -109,36 +110,41 @@ def fetch_loop():
             r = requests.get(API_URL, headers=HEADERS, timeout=10)
             data = r.json()
 
-            # ✅ Check all lobbies, not just first
+            # ✅ Check ALL lobbies
+            print("------ All lobbies ------")
+            for code, lobby in data.items():
+                print(code, "=>", lobby.get("host_name"), lobby.get("status"))
+
+            # ✅ Now scan again for your host
             for code, lobby in data.items():
 
                 if lobby.get("host_name") != HOST_NAME:
-                    continue  # skip others
+                    continue  # ignore others
 
                 status = lobby.get("status")
                 players = lobby.get("players")
 
-                # ✅ NEW LOBBY FOUND
+                # ✅ NEW LOBBY DETECTED
                 if code != last_code:
                     send_embed("🚀✅ NEW LOBBY LIVE!", code, lobby)
                     last_code = code
                     last_status = status
                     print("✅ NEW LOBBY:", code)
-                    break
+                    continue
 
                 # ✅ GAME STARTED
                 if last_status == "In Lobby" and status == "In Game":
                     send_embed("🟥 Game Started!", code, lobby, "I'll ping you when it ends.")
                     last_status = status
                     print("🎮 Game started")
-                    break
+                    continue
 
-                # ✅ GAME ENDED → BACK TO LOBBY
+                # ✅ GAME ENDED
                 if last_status == "In Game" and status == "In Lobby":
                     send_embed("🟩 Game Ended!", code, lobby, "You may join again.")
                     last_status = status
                     print("✅ Game ended")
-                    break
+                    continue
 
             time.sleep(5)
 
@@ -166,4 +172,4 @@ def start_background():
 # ✅ Start thread on boot
 start_background()
 
-# Render runs app via gunicorn so we expose app
+# Render will run this using gunicorn
