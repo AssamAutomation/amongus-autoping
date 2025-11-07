@@ -13,8 +13,8 @@ app = Flask(__name__)
 API_URL = "https://gurge44.pythonanywhere.com/get-all-lobbies-json"
 HOST_NAME = "ARIJIT18"
 
-WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")       # Your webhook
-COOKIE_DATA = os.getenv("SITE_COOKIE")           # Cookie from browser
+WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
+COOKIE_DATA = os.getenv("SITE_COOKIE")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
@@ -23,15 +23,16 @@ HEADERS = {
     "Cookie": COOKIE_DATA
 }
 
-# Anti-spam cache
+# anti-spam
 last_code = None
 last_status = None
 
+
 # ==============================
-# ✅ AUTO DELETE MSG AFTER 2 MINS
+# DELETE MESSAGE AFTER 2 MINS
 # ==============================
 def delete_message_later(webhook, msg_id):
-    time.sleep(120)  # 2 minutes
+    time.sleep(120)
     try:
         requests.delete(f"{webhook}/messages/{msg_id}")
         print("🗑 Deleted old message:", msg_id)
@@ -40,9 +41,12 @@ def delete_message_later(webhook, msg_id):
 
 
 # ==============================
-# ✅ SEND PREMIUM EMBED
+# SEND EMBED
 # ==============================
 def send_embed(event_title, code, lobby, extra_message=""):
+
+    # ✅ remove backticks — only CODE gets copied
+    display_code = code if code != "-" else "NO CODE"
 
     banner_url = "https://alfabetajuega.com/hero/2021/01/among-us-1.jpg?width=768&aspect_ratio=16:9&format=nowebp"
     thumb_url = "https://cdn.aptoide.com/imgs/d/4/6/d460a63e167a534bc7b9e4f1eaeed7dc_fgraphic.png"
@@ -55,7 +59,7 @@ def send_embed(event_title, code, lobby, extra_message=""):
         "fields": [
             {
                 "name": "🎮 JOIN CODE (Tap to Copy)",
-                "value": f"```\n{code}\n```",
+                "value": display_code,   # ✅ only the code, no ``` no commas
                 "inline": False
             },
             {"name": "👤 Host", "value": lobby.get("host_name", "-"), "inline": True},
@@ -100,7 +104,7 @@ def send_embed(event_title, code, lobby, extra_message=""):
 
 
 # ==============================
-# ✅ FETCH AND CHECK LOOP
+# FETCH LOOP (SCANS ALL LOBBIES)
 # ==============================
 def fetch_loop():
     global last_code, last_status
@@ -110,21 +114,20 @@ def fetch_loop():
             r = requests.get(API_URL, headers=HEADERS, timeout=10)
             data = r.json()
 
-            # ✅ Check ALL lobbies
+            # ✅ show all lobbies in log
             print("------ All lobbies ------")
             for code, lobby in data.items():
                 print(code, "=>", lobby.get("host_name"), lobby.get("status"))
 
-            # ✅ Now scan again for your host
+            # ✅ check your host lobbies
             for code, lobby in data.items():
 
                 if lobby.get("host_name") != HOST_NAME:
-                    continue  # ignore others
+                    continue
 
                 status = lobby.get("status")
-                players = lobby.get("players")
 
-                # ✅ NEW LOBBY DETECTED
+                # NEW LOBBY
                 if code != last_code:
                     send_embed("🚀✅ NEW LOBBY LIVE!", code, lobby)
                     last_code = code
@@ -132,14 +135,14 @@ def fetch_loop():
                     print("✅ NEW LOBBY:", code)
                     continue
 
-                # ✅ GAME STARTED
+                # GAME STARTED
                 if last_status == "In Lobby" and status == "In Game":
                     send_embed("🟥 Game Started!", code, lobby, "I'll ping you when it ends.")
                     last_status = status
                     print("🎮 Game started")
                     continue
 
-                # ✅ GAME ENDED
+                # GAME ENDED
                 if last_status == "In Game" and status == "In Lobby":
                     send_embed("🟩 Game Ended!", code, lobby, "You may join again.")
                     last_status = status
@@ -154,7 +157,7 @@ def fetch_loop():
 
 
 # ==============================
-# ✅ FLASK ROOT ROUTE
+# FLASK ROUTE
 # ==============================
 @app.route("/")
 def home():
@@ -162,14 +165,12 @@ def home():
 
 
 # ==============================
-# ✅ BACKGROUND THREAD
+# BACKGROUND THREAD
 # ==============================
 def start_background():
     t = threading.Thread(target=fetch_loop, daemon=True)
     t.start()
 
 
-# ✅ Start thread on boot
+# ✅ Start on boot
 start_background()
-
-# Render will run this using gunicorn
