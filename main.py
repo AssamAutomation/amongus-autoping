@@ -24,7 +24,7 @@ HEADERS = {
     "Cookie": COOKIE_DATA
 }
 
-RENDER_URL = "https://amongus-autoping.onrender.com/"  # your URL
+RENDER_URL = "https://amongus-autoping.onrender.com/"  # your Render URL
 
 # ==============================
 # ANTI-SPAM / STATE
@@ -35,8 +35,11 @@ STATE_FILE = "last_state.json"
 CODE_STABILITY_POLLS = 3        # 3 * 5s = 15s same code
 STATUS_STABILITY_POLLS = 2      # 2 * 5s = 10s same status
 
-GLOBAL_COOLDOWN_SEC = 90        # min time between any two messages
+GLOBAL_COOLDOWN_SEC = 90        # code/status announcements minimum gap
 REPEAT_CODE_SUPPRESS_SEC = 600  # don't re-announce same code within 10 min
+
+# Player updates (own small gap so it can refresh often)
+PLAYER_UPDATE_MIN_GAP = 5       # seconds between player-count updates
 
 # Offline cleanup
 OFFLINE_DELETE_SEC = 20 * 60    # delete message if host unseen for 20 minutes
@@ -45,8 +48,10 @@ OFFLINE_DELETE_SEC = 20 * 60    # delete message if host unseen for 20 minutes
 state_lock = threading.Lock()
 last_code = None
 last_status = None
+last_players = None
 last_msg_id = None
 last_sent_ts = 0
+last_player_sent_ts = 0
 last_seen_host_ts = 0
 recent_codes = deque(maxlen=10)   # list of {"code": str, "ts": float}
 
@@ -56,20 +61,21 @@ observed_code_count = 0
 observed_status = None
 observed_status_count = 0
 
-
 # ==============================
 # PERSISTENCE
 # ==============================
 def load_state():
-    global last_code, last_status, last_msg_id, last_sent_ts, last_seen_host_ts, recent_codes
+    global last_code, last_status, last_players, last_msg_id, last_sent_ts, last_player_sent_ts, last_seen_host_ts, recent_codes
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r") as f:
                 data = json.load(f)
             last_code = data.get("last_code")
             last_status = data.get("last_status")
+            last_players = data.get("last_players")
             last_msg_id = data.get("last_msg_id")
             last_sent_ts = data.get("last_sent_ts", 0)
+            last_player_sent_ts = data.get("last_player_sent_ts", 0)
             last_seen_host_ts = data.get("last_seen_host_ts", 0)
             rc = data.get("recent_codes", [])
             cutoff = time.time() - REPEAT_CODE_SUPPRESS_SEC
@@ -80,8 +86,10 @@ def load_state():
             print("Loaded state:", {
                 "last_code": last_code,
                 "last_status": last_status,
+                "last_players": last_players,
                 "last_msg_id": last_msg_id,
                 "last_sent_ts": last_sent_ts,
+                "last_player_sent_ts": last_player_sent_ts,
                 "last_seen_host_ts": last_seen_host_ts,
                 "recent_codes": list(recent_codes)
             })
@@ -96,8 +104,10 @@ def save_state():
         data = {
             "last_code": last_code,
             "last_status": last_status,
+            "last_players": last_players,
             "last_msg_id": last_msg_id,
             "last_sent_ts": last_sent_ts,
+            "last_player_sent_ts": last_player_sent_ts,
             "last_seen_host_ts": last_seen_host_ts,
             "recent_codes": list(recent_codes)
         }
@@ -134,6 +144,15 @@ def delete_message(msg_id: str):
         print("⚠ Delete error:", e)
 
 
+def title_for(status: str, players: int) -> str:
+    p = int(players or 0)
+    if status == "In Game":
+        return f"🎮 MATCH IN PROGRESS ({p}/15)"
+    else:
+        # default treat as In Lobby/Waiting
+        return f"🎮 JOIN NOW ({p}/15)"
+
+
 def build_embed(event_title, code, lobby, extra_message=""):
     display_code = (code or "").strip()
     if display_code in ("", "-"):
@@ -164,20 +183,36 @@ def build_embed(event_title, code, lobby, extra_message=""):
     return embed
 
 
-def send_embed_and_get_id(event_title, code, lobby, extra_message=""):
-    global last_sent_ts
-    now = time.time()
-    if now - last_sent_ts < GLOBAL_COOLDOWN_SEC:
-        print(f"⏳ Cooldown active ({int(GLOBAL_COOLDOWN_SEC - (now - last_sent_ts))}s left) — skipping send.")
-        return None
+def send_embed_and_get_id(event_title, code, lobby, *, bypass_cooldown=False, is_player_update=False, min_gap=0):
+    """
+    Sends embed and returns message id.
+    - bypass_cooldown: skip global cooldown (used for player updates)
+    - is_player_update: when True, uses last_player_sent_ts tracking instead of last_sent_ts
+    - min_gap: minimum seconds between consecutive sends for this category
+    """
+    global last_sent_ts, last_player_sent_ts
 
-    payload = {"content": "@everyone", "embeds": [build_embed(event_title, code, lobby, extra_message)]}
+    now = time.time()
+    if is_player_update:
+        # own smaller gap
+        if now - last_player_sent_ts < max(min_gap, 0):
+            print(f"⏳ Player-update gap active ({int(max(min_gap,0) - (now - last_player_sent_ts))}s left) — skip.")
+            return None
+    else:
+        if not bypass_cooldown and (now - last_sent_ts < GLOBAL_COOLDOWN_SEC):
+            print(f"⏳ Global cooldown ({int(GLOBAL_COOLDOWN_SEC - (now - last_sent_ts))}s left) — skip.")
+            return None
+
+    payload = {"content": "@everyone", "embeds": [build_embed(event_title, code, lobby)]}
     try:
         r = requests.post(WEBHOOK_URL + "?wait=true", json=payload, timeout=10)
         print("✅ Embed send status:", r.status_code)
         if r.status_code == 200:
             msg_id = r.json().get("id")
-            last_sent_ts = now
+            if is_player_update:
+                last_player_sent_ts = now
+            else:
+                last_sent_ts = now
             return msg_id
         else:
             print("❌ Webhook non-200:", r.text[:200])
@@ -214,10 +249,10 @@ def select_host_lobby(all_data: dict):
 
 
 # ==============================
-# FETCH LOOP — STABLE + CLEAN DELETE RULES
+# FETCH LOOP — STABLE + CLEAN DELETE RULES + PLAYER UPDATES
 # ==============================
 def fetch_loop():
-    global last_code, last_status, last_msg_id, last_seen_host_ts
+    global last_code, last_status, last_players, last_msg_id, last_seen_host_ts
     global observed_code, observed_code_count, observed_status, observed_status_count
 
     while True:
@@ -228,8 +263,8 @@ def fetch_loop():
             # Debug list
             try:
                 print("------ All lobbies ------")
-                for code, lobby in data.items():
-                    print(code, "=>", lobby.get("host_name"), lobby.get("status"), lobby.get("players"))
+                for c, l in data.items():
+                    print(c, "=>", l.get("host_name"), l.get("status"), l.get("players"))
             except Exception:
                 pass
 
@@ -242,8 +277,6 @@ def fetch_loop():
                     delete_message(last_msg_id)
                     last_msg_id = None
                     save_state()
-                # mark host unseen to trigger offline fallback timer
-                # (offline watchdog will also delete after 20 min if anything remains)
                 time.sleep(5)
                 continue
 
@@ -251,6 +284,7 @@ def fetch_loop():
             last_seen_host_ts = time.time()
 
             status = (lobby.get("status") or "").strip()
+            players = int(lobby.get("players") or 0)
 
             # ----- STABILITY: CODE -----
             if code == observed_code:
@@ -270,43 +304,75 @@ def fetch_loop():
 
             # ----- DECISIONS -----
             with state_lock:
-                # NEW STABLE LOBBY (code change)
+
+                # 1) NEW STABLE LOBBY (code change)
                 if code_stable and code != last_code:
                     if not code_recently_announced(code):
-                        # delete previous message BEFORE sending
                         if last_msg_id:
                             print("🔁 New code → deleting previous message before posting")
                             delete_message(last_msg_id)
                             last_msg_id = None
-                        msg_id = send_embed_and_get_id("🚀✅ NEW LOBBY LIVE!", code, lobby)
+                        msg_id = send_embed_and_get_id(
+                            title_for(status, players), code, lobby,
+                            bypass_cooldown=False, is_player_update=False
+                        )
                         if msg_id:
                             last_msg_id = msg_id
                             last_code = code
                             last_status = status
+                            last_players = players
                             remember_code_announcement(code)
                             save_state()
                     else:
                         print(f"🔇 Suppressed repeat code {code} (within {REPEAT_CODE_SUPPRESS_SEC}s)")
+
                 else:
-                    # Same code, status transition (only when stable)
+                    # 2) STATUS CHANGE (same code; stable)
                     if status_stable and last_code == code and last_status != status:
-                        # ALWAYS delete previous message before posting the update
                         if last_msg_id:
                             print("🔁 Status change → deleting previous message before posting")
                             delete_message(last_msg_id)
                             last_msg_id = None
 
-                        if last_status == "In Lobby" and status == "In Game":
-                            msg_id = send_embed_and_get_id("🟥 Game Started!", code, lobby, "I'll ping you when it ends.")
-                        elif last_status == "In Game" and status == "In Lobby":
-                            msg_id = send_embed_and_get_id("🟩 Game Ended!", code, lobby, "You may join again.")
-                        else:
-                            # other status changes (rare), still post once
-                            msg_id = send_embed_and_get_id(f"ℹ Status: {status}", code, lobby)
-
+                        msg_id = send_embed_and_get_id(
+                            title_for(status, players), code, lobby,
+                            bypass_cooldown=False, is_player_update=False
+                        )
                         if msg_id:
                             last_msg_id = msg_id
                             last_status = status
+                            last_players = players
+                            save_state()
+
+                    # 3) PLAYER COUNT CHANGE (same code; status stable; players changed)
+                    elif code_stable and status_stable and last_code == code and last_players is not None and players != last_players:
+                        if last_msg_id:
+                            print(f"🔁 Players {last_players} → {players} → deleting & updating")
+                            delete_message(last_msg_id)
+                            last_msg_id = None
+
+                        # Player updates should be frequent; bypass global cooldown but apply small gap
+                        msg_id = send_embed_and_get_id(
+                            title_for(status, players), code, lobby,
+                            bypass_cooldown=True, is_player_update=True, min_gap=PLAYER_UPDATE_MIN_GAP
+                        )
+                        if msg_id:
+                            last_msg_id = msg_id
+                            last_players = players
+                            save_state()
+
+                    # 4) First-time message when state loaded but nothing sent yet
+                    elif last_msg_id is None and code_stable:
+                        msg_id = send_embed_and_get_id(
+                            title_for(status, players), code, lobby,
+                            bypass_cooldown=False, is_player_update=False
+                        )
+                        if msg_id:
+                            last_msg_id = msg_id
+                            last_code = code
+                            last_status = status
+                            last_players = players
+                            remember_code_announcement(code)
                             save_state()
 
             time.sleep(5)
