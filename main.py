@@ -1,135 +1,171 @@
 import time
-import requests
+import json
 import threading
-from flask import Flask
+import requests
 import os
+from flask import Flask
 
 app = Flask(__name__)
 
+# ==============================
+# CONFIG
+# ==============================
 API_URL = "https://gurge44.pythonanywhere.com/get-all-lobbies-json"
+HOST_NAME = "ARIJIT18"
 
-COOKIE_HEADER = {
-    "Cookie": os.getenv("SITE_COOKIE", "")
+WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")       # Your webhook
+COOKIE_DATA = os.getenv("SITE_COOKIE")           # Cookie from browser
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "application/json,text/plain,*/*",
+    "Referer": "https://gurge44.pythonanywhere.com/lobbies",
+    "Cookie": COOKIE_DATA
 }
 
-WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK", "")
-HOST_NAME = os.getenv("HOST_NAME", "").upper()
+# Anti-spam cache
+last_code = None
+last_status = None
 
-last_sent_code = None
+
+# ==============================
+# ✅ AUTO DELETE MSG AFTER 2 MINS
+# ==============================
+def delete_message_later(webhook, msg_id):
+    time.sleep(120)  # 2 minutes
+    try:
+        requests.delete(f"{webhook}/messages/{msg_id}")
+        print("🗑 Deleted old message:", msg_id)
+    except:
+        print("⚠ Could not delete message")
 
 
-def send_discord_lobby(lobby):
-    global last_sent_code
+# ==============================
+# ✅ SEND PREMIUM EMBED
+# ==============================
+def send_embed(event_title, code, lobby, extra_message=""):
 
-    code = lobby.get("code", "")
-    if not code:
-        return
-
-    # Anti-spam: do not send same code twice
-    if code == last_sent_code:
-        return
-    
-    last_sent_code = code
-
-    host = lobby.get("host_name", "Unknown")
-    server = lobby.get("server_name", "Unknown")
-    players = lobby.get("players", "?")
-    mapname = lobby.get("map", "?")
-    mode = lobby.get("game_mode", "?")
-    version = lobby.get("version", "?")
+    banner_url = "https://alfabetajuega.com/hero/2021/01/among-us-1.jpg?width=768&aspect_ratio=16:9&format=nowebp"
+    thumb_url = "https://cdn.aptoide.com/imgs/d/4/6/d460a63e167a534bc7b9e4f1eaeed7dc_fgraphic.png"
 
     embed = {
-        "content": "@everyone ✅ **YOUR AMONG US LOBBY IS LIVE!**",
-        "embeds": [
+        "title": event_title,
+        "color": 0xF7E7A6,   # Light creamy yellow
+        "thumbnail": {"url": thumb_url},
+        "image": {"url": banner_url},
+        "fields": [
             {
-                "title": "🚀✅ NEW LOBBY LIVE!",
-                "color": 0x2ecc71,
-                "thumbnail": {
-                    "url": "https://cdn.aptoide.com/imgs/d/4/6/d460a63e167a534bc7b9e4f1eaeed7dc_fgraphic.png"
-                },
-                "fields": [
-                    {
-                        "name": "🎮 JOIN CODE (Tap to Copy)",
-                        "value": f"```{code}```",
-                        "inline": False
-                    },
-                    {"name": "👤 Host", "value": host, "inline": True},
-                    {"name": "🌍 Server", "value": server, "inline": True},
-                    {"name": "👥 Players", "value": str(players), "inline": True},
-                    {"name": "🗺 Map", "value": mapname, "inline": True},
-                    {"name": "⚙️ Mode", "value": mode, "inline": True},
-                    {"name": "📌 Version", "value": version, "inline": True}
-                ],
-                "image": {
-                    "url": "https://alfabetajuega.com/hero/2021/01/among-us-1.jpg?width=768"
-                }
+                "name": "🎮 JOIN CODE (Tap to Copy)",
+                "value": f"```\n{code}\n```",
+                "inline": False
             },
+            {"name": "👤 Host", "value": lobby.get("host_name", "-"), "inline": True},
+            {"name": "🌍 Server", "value": lobby.get("server_name", "-"), "inline": True},
+            {"name": "👥 Players", "value": str(lobby.get("players", "-")), "inline": True},
+            {"name": "🗺 Map", "value": lobby.get("map", "-"), "inline": True},
+            {"name": "🎛 Mode", "value": lobby.get("game_mode", "-"), "inline": True},
+            {"name": "💾 Version", "value": lobby.get("version", "-"), "inline": True},
+        ],
+        "footer": {
+            "text": "Among Us AutoPing • ARIJIT18 Host",
+            "icon_url": thumb_url
+        }
+    }
 
-            # ✅ SEPARATE COPY-ONLY EMBED (Only this gets copied)
-            {
-                "description": f"```{code}```",
-                "color": 0xffffff
-            }
-        ]
+    if extra_message:
+        embed["fields"].append({
+            "name": "📢 Update",
+            "value": extra_message,
+            "inline": False
+        })
+
+    payload = {
+        "content": "@everyone",
+        "embeds": [embed]
     }
 
     try:
-        r = requests.post(WEBHOOK_URL, json=embed)
-        if r.status_code not in [200, 204]:
-            print("❌ Webhook failed:", r.text)
-            return
-        
-        print(f"✅ SENT LOBBY CODE: {code}")
+        r = requests.post(WEBHOOK_URL + "?wait=true", json=payload)
+        print("✅ Embed sent:", r.status_code)
 
-        # ✅ Auto-delete after 2 mins
-        delete_after_120_seconds()
+        if r.status_code == 200:
+            msg_id = r.json()["id"]
+            threading.Thread(
+                target=delete_message_later,
+                args=(WEBHOOK_URL, msg_id),
+                daemon=True
+            ).start()
 
     except Exception as e:
-        print("❌ Webhook error:", e)
+        print("❌ Webhook send error:", e)
 
 
-def delete_after_120_seconds():
-    """Deletes the last sent message after 120 seconds (Discord only allows via token bot)."""
-    # Webhooks cannot delete their own messages unless using bot tokens.
-    # If user wants this, they must use a full Discord bot, not a webhook.
-    pass
-
-
-
+# ==============================
+# ✅ FETCH AND CHECK LOOP
+# ==============================
 def fetch_loop():
-    print("✅ BACKGROUND SEARCH STARTED...")
+    global last_code, last_status
 
     while True:
         try:
-            r = requests.get(API_URL, headers=COOKIE_HEADER, timeout=10)
+            r = requests.get(API_URL, headers=HEADERS, timeout=10)
             data = r.json()
 
-            if not data:
-                print("❌ No data received.")
-                time.sleep(5)
-                continue
-            
-            # Loop through ALL lobbies (not just first)
+            # ✅ Check all lobbies, not just first
             for code, lobby in data.items():
-                host = lobby.get("host_name", "").upper()
 
-                if host == HOST_NAME:
-                    print(f"\n✅ MATCH FOUND → {code}")
-                    send_discord_lobby({**lobby, "code": code})
+                if lobby.get("host_name") != HOST_NAME:
+                    continue  # skip others
+
+                status = lobby.get("status")
+                players = lobby.get("players")
+
+                # ✅ NEW LOBBY FOUND
+                if code != last_code:
+                    send_embed("🚀✅ NEW LOBBY LIVE!", code, lobby)
+                    last_code = code
+                    last_status = status
+                    print("✅ NEW LOBBY:", code)
+                    break
+
+                # ✅ GAME STARTED
+                if last_status == "In Lobby" and status == "In Game":
+                    send_embed("🟥 Game Started!", code, lobby, "I'll ping you when it ends.")
+                    last_status = status
+                    print("🎮 Game started")
+                    break
+
+                # ✅ GAME ENDED → BACK TO LOBBY
+                if last_status == "In Game" and status == "In Lobby":
+                    send_embed("🟩 Game Ended!", code, lobby, "You may join again.")
+                    last_status = status
+                    print("✅ Game ended")
+                    break
+
+            time.sleep(5)
 
         except Exception as e:
             print("❌ Fetch error:", e)
-
-        time.sleep(6)  # Scan every 6 seconds
-
+            time.sleep(5)
 
 
+# ==============================
+# ✅ FLASK ROOT ROUTE
+# ==============================
 @app.route("/")
 def home():
-    return "AutoPing Active ✅"
+    return "✅ AutoPing is running..."
 
 
-if __name__ == "__main__":
-    threading.Thread(target=fetch_loop, daemon=True).start()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+# ==============================
+# ✅ BACKGROUND THREAD
+# ==============================
+def start_background():
+    t = threading.Thread(target=fetch_loop, daemon=True)
+    t.start()
 
+
+# ✅ Start thread on boot
+start_background()
+
+# Render runs app via gunicorn so we expose app
