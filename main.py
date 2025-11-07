@@ -28,8 +28,9 @@ last_status = None
 # ✅ SEND PREMIUM EMBED
 # ===============================================================
 def send_embed(event_title, code, lobby, extra_message="", color=0xF7E400):
-    thumbnail_url = "https://i.imgur.com/1V5ZQog.png"  
-    banner_url = "https://i.imgur.com/eN0S8jm.jpeg"   # ✅ Option C banner
+        thumbnail_url = "https://i.imgur.com/1V5ZQog.png"
+    banner_url = "https://img.itch.zone/aW1hZ2UvMjU3Njc3LzYyNzc0MTkucG5n/original/oyM651.png"
+   # ✅ Option C banner
 
     embed = {
         "title": f"**{event_title}**",
