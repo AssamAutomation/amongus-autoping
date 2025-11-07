@@ -54,7 +54,7 @@ print("Loaded state:", state)
 # DELETE MESSAGE AFTER 2 MINS
 # ==============================
 def delete_message_later(webhook, msg_id):
-    time.sleep(120)
+    time.sleep(900)
     try:
         requests.delete(f"{webhook}/messages/{msg_id}")
         print("🗑 Deleted old message:", msg_id)
