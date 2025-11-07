@@ -8,7 +8,7 @@ from flask import Flask
 # CONFIG
 # --------------------------
 API_URL = "https://gurge44.pythonanywhere.com/get-all-lobbies"
-COOKIE = os.getenv("GURGE_COOKIE")  # Your cookie in render env
+COOKIE = os.getenv("SITE_COOKIE")  # Your cookie in render env
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")  # Your Discord Webhook
 TARGET_HOST = "ARIJIT18"  # Your host name
 last_sent_code = None
