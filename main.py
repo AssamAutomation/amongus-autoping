@@ -32,7 +32,7 @@ last_status = None
 # DELETE MESSAGE AFTER 2 MINS
 # ==============================
 def delete_message_later(webhook, msg_id):
-    time.sleep(900)
+    time.sleep(120)
     try:
         requests.delete(f"{webhook}/messages/{msg_id}")
         print("🗑 Deleted old message:", msg_id)
@@ -45,7 +45,6 @@ def delete_message_later(webhook, msg_id):
 # ==============================
 def send_embed(event_title, code, lobby, extra_message=""):
 
-    # ✅ remove backticks — only CODE gets copied
     display_code = code if code != "-" else "NO CODE"
 
     banner_url = "https://alfabetajuega.com/hero/2021/01/among-us-1.jpg?width=768&aspect_ratio=16:9&format=nowebp"
@@ -59,7 +58,7 @@ def send_embed(event_title, code, lobby, extra_message=""):
         "fields": [
             {
                 "name": "🎮 JOIN CODE (Tap to Copy)",
-                "value": display_code,   # ✅ only the code, no ``` no commas
+                "value": display_code,
                 "inline": False
             },
             {"name": "👤 Host", "value": lobby.get("host_name", "-"), "inline": True},
@@ -104,7 +103,7 @@ def send_embed(event_title, code, lobby, extra_message=""):
 
 
 # ==============================
-# FETCH LOOP (SCANS ALL LOBBIES)
+# FETCH LOOP — SCANS ALL LOBBIES
 # ==============================
 def fetch_loop():
     global last_code, last_status
@@ -114,12 +113,10 @@ def fetch_loop():
             r = requests.get(API_URL, headers=HEADERS, timeout=10)
             data = r.json()
 
-            # ✅ show all lobbies in log
             print("------ All lobbies ------")
             for code, lobby in data.items():
                 print(code, "=>", lobby.get("host_name"), lobby.get("status"))
 
-            # ✅ check your host lobbies
             for code, lobby in data.items():
 
                 if lobby.get("host_name") != HOST_NAME:
@@ -157,6 +154,20 @@ def fetch_loop():
 
 
 # ==============================
+# ✅ KEEP ALIVE PINGER
+# ==============================
+def keep_alive():
+    while True:
+        try:
+            requests.get("https://amongus-autoping.onrender.com/")
+            print("🔄 Keep-alive ping sent")
+        except:
+            pass
+
+        time.sleep(240)  # ping every 4 min
+
+
+# ==============================
 # FLASK ROUTE
 # ==============================
 @app.route("/")
@@ -165,11 +176,11 @@ def home():
 
 
 # ==============================
-# BACKGROUND THREAD
+# BACKGROUND THREADS
 # ==============================
 def start_background():
-    t = threading.Thread(target=fetch_loop, daemon=True)
-    t.start()
+    threading.Thread(target=fetch_loop, daemon=True).start()
+    threading.Thread(target=keep_alive, daemon=True).start()
 
 
 # ✅ Start on boot
