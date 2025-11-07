@@ -24,6 +24,8 @@ HEADERS = {
     "Cookie": COOKIE_DATA
 }
 
+RENDER_URL = "https://amongus-autoping.onrender.com/"  # your URL
+
 # ==============================
 # ANTI-SPAM / STATE
 # ==============================
@@ -33,15 +35,20 @@ STATE_FILE = "last_state.json"
 CODE_STABILITY_POLLS = 3        # 3 * 5s = 15s same code
 STATUS_STABILITY_POLLS = 2      # 2 * 5s = 10s same status
 
-GLOBAL_COOLDOWN_SEC = 120       # at least 2 min between any messages
-REPEAT_CODE_SUPPRESS_SEC = 600  # don't re-announce same code within 10 minutes
+GLOBAL_COOLDOWN_SEC = 90        # min time between any two messages
+REPEAT_CODE_SUPPRESS_SEC = 600  # don't re-announce same code within 10 min
 
-# In-memory runtime state (also persisted)
+# Offline cleanup
+OFFLINE_DELETE_SEC = 20 * 60    # delete message if host unseen for 20 minutes
+
+# In-memory runtime state (persisted too)
 state_lock = threading.Lock()
 last_code = None
 last_status = None
+last_msg_id = None
 last_sent_ts = 0
-recent_codes = deque(maxlen=8)   # list of {"code": str, "ts": float}
+last_seen_host_ts = 0
+recent_codes = deque(maxlen=10)   # list of {"code": str, "ts": float}
 
 # Rolling observations to enforce stability
 observed_code = None
@@ -50,17 +57,21 @@ observed_status = None
 observed_status_count = 0
 
 
+# ==============================
+# PERSISTENCE
+# ==============================
 def load_state():
-    global last_code, last_status, last_sent_ts, recent_codes
+    global last_code, last_status, last_msg_id, last_sent_ts, last_seen_host_ts, recent_codes
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r") as f:
                 data = json.load(f)
             last_code = data.get("last_code")
             last_status = data.get("last_status")
+            last_msg_id = data.get("last_msg_id")
             last_sent_ts = data.get("last_sent_ts", 0)
+            last_seen_host_ts = data.get("last_seen_host_ts", 0)
             rc = data.get("recent_codes", [])
-            # filter out old entries
             cutoff = time.time() - REPEAT_CODE_SUPPRESS_SEC
             rc = [x for x in rc if x.get("ts", 0) >= cutoff]
             recent_codes.clear()
@@ -69,11 +80,15 @@ def load_state():
             print("Loaded state:", {
                 "last_code": last_code,
                 "last_status": last_status,
+                "last_msg_id": last_msg_id,
                 "last_sent_ts": last_sent_ts,
+                "last_seen_host_ts": last_seen_host_ts,
                 "recent_codes": list(recent_codes)
             })
         except Exception as e:
             print("State load error, starting fresh:", e)
+    else:
+        last_seen_host_ts = 0
 
 
 def save_state():
@@ -81,7 +96,9 @@ def save_state():
         data = {
             "last_code": last_code,
             "last_status": last_status,
+            "last_msg_id": last_msg_id,
             "last_sent_ts": last_sent_ts,
+            "last_seen_host_ts": last_seen_host_ts,
             "recent_codes": list(recent_codes)
         }
         with open(STATE_FILE, "w") as f:
@@ -92,7 +109,6 @@ def save_state():
 
 def code_recently_announced(code: str) -> bool:
     now = time.time()
-    # purge old
     while recent_codes and (now - recent_codes[0]["ts"] > REPEAT_CODE_SUPPRESS_SEC):
         recent_codes.popleft()
     for item in recent_codes:
@@ -106,30 +122,19 @@ def remember_code_announcement(code: str):
 
 
 # ==============================
-# DELETE MESSAGE AFTER 2 MINS
+# DISCORD HELPERS
 # ==============================
-def delete_message_later(webhook, msg_id):
-    time.sleep(120)
-    try:
-        requests.delete(f"{webhook}/messages/{msg_id}")
-        print("🗑 Deleted old message:", msg_id)
-    except Exception as e:
-        print("⚠ Could not delete message:", e)
-
-
-# ==============================
-# SEND EMBED (respects cooldown)
-# ==============================
-def safe_send_embed(event_title, code, lobby, extra_message=""):
-    global last_sent_ts
-
-    # Global cooldown
-    now = time.time()
-    if now - last_sent_ts < GLOBAL_COOLDOWN_SEC:
-        print(f"⏳ Cooldown active ({int(GLOBAL_COOLDOWN_SEC - (now - last_sent_ts))}s left) — skipping send.")
+def delete_message(msg_id: str):
+    if not msg_id:
         return
+    try:
+        r = requests.delete(f"{WEBHOOK_URL}/messages/{msg_id}", timeout=10)
+        print(f"🗑 Delete {msg_id} →", r.status_code)
+    except Exception as e:
+        print("⚠ Delete error:", e)
 
-    # Validate code
+
+def build_embed(event_title, code, lobby, extra_message=""):
     display_code = (code or "").strip()
     if display_code in ("", "-"):
         display_code = "NO CODE"
@@ -150,45 +155,47 @@ def safe_send_embed(event_title, code, lobby, extra_message=""):
             {"name": "🗺 Map", "value": lobby.get("map", "-"), "inline": True},
             {"name": "🎛 Mode", "value": lobby.get("game_mode", "-"), "inline": True},
             {"name": "💾 Version", "value": lobby.get("version", "-"), "inline": True},
+            {"name": "📌 Status", "value": lobby.get("status", "-"), "inline": True},
         ],
         "footer": {"text": "Among Us AutoPing • ARIJIT18 Host", "icon_url": thumb_url}
     }
-
     if extra_message:
         embed["fields"].append({"name": "📢 Update", "value": extra_message, "inline": False})
+    return embed
 
-    payload = {"content": "@everyone", "embeds": [embed]}
 
+def send_embed_and_get_id(event_title, code, lobby, extra_message=""):
+    global last_sent_ts
+    now = time.time()
+    if now - last_sent_ts < GLOBAL_COOLDOWN_SEC:
+        print(f"⏳ Cooldown active ({int(GLOBAL_COOLDOWN_SEC - (now - last_sent_ts))}s left) — skipping send.")
+        return None
+
+    payload = {"content": "@everyone", "embeds": [build_embed(event_title, code, lobby, extra_message)]}
     try:
         r = requests.post(WEBHOOK_URL + "?wait=true", json=payload, timeout=10)
         print("✅ Embed send status:", r.status_code)
-
         if r.status_code == 200:
             msg_id = r.json().get("id")
             last_sent_ts = now
-            threading.Thread(target=delete_message_later, args=(WEBHOOK_URL, msg_id), daemon=True).start()
+            return msg_id
         else:
             print("❌ Webhook non-200:", r.text[:200])
-
+            return None
     except Exception as e:
         print("❌ Webhook send error:", e)
+        return None
 
 
 # ==============================
-# CHOOSE BEST LOBBY FOR HOST
+# LOBBY SELECTOR (pick best for host)
 # ==============================
 def select_host_lobby(all_data: dict):
-    """
-    Return (code, lobby) for HOST_NAME with simple heuristics:
-    - Prefer non-empty code
-    - Prefer 'In Game' over 'In Lobby'
-    - Prefer higher players
-    """
     candidates = []
     for code, lobby in all_data.items():
         if lobby.get("host_name") != HOST_NAME:
             continue
-        status = lobby.get("status") or ""
+        status = (lobby.get("status") or "").strip()
         players = int(lobby.get("players") or 0)
         join_code = (code or "").strip()
         score = 0
@@ -198,22 +205,19 @@ def select_host_lobby(all_data: dict):
             score += 5
         if status == "In Lobby":
             score += 3
-        score += min(players, 15)  # cap
+        score += min(players, 15)
         candidates.append((score, code, lobby))
-
     if not candidates:
         return None, None
-
-    # pick highest score
     candidates.sort(key=lambda x: x[0], reverse=True)
     return candidates[0][1], candidates[0][2]
 
 
 # ==============================
-# FETCH LOOP — SPAM-PROOF
+# FETCH LOOP — STABLE + CLEAN DELETE RULES
 # ==============================
 def fetch_loop():
-    global last_code, last_status
+    global last_code, last_status, last_msg_id, last_seen_host_ts
     global observed_code, observed_code_count, observed_status, observed_status_count
 
     while True:
@@ -230,57 +234,78 @@ def fetch_loop():
                 pass
 
             code, lobby = select_host_lobby(data)
+
             if not lobby:
-                # No lobby for our host — reset observations slowly
-                observed_code = None
-                observed_code_count = 0
-                observed_status = None
-                observed_status_count = 0
+                # No lobby for our host → delete immediately if a message exists (cancelled/not searchable)
+                if last_msg_id:
+                    print("❌ Host lobby gone → deleting current message")
+                    delete_message(last_msg_id)
+                    last_msg_id = None
+                    save_state()
+                # mark host unseen to trigger offline fallback timer
+                # (offline watchdog will also delete after 20 min if anything remains)
                 time.sleep(5)
                 continue
 
-            status = lobby.get("status") or ""
+            # Host is present
+            last_seen_host_ts = time.time()
 
-            # ---------- CODE STABILITY ----------
+            status = (lobby.get("status") or "").strip()
+
+            # ----- STABILITY: CODE -----
             if code == observed_code:
                 observed_code_count += 1
             else:
                 observed_code = code
                 observed_code_count = 1
+            code_stable = observed_code_count >= CODE_STABILITY_POLLS
 
-            # Only lock in current_code when stable enough
-            stable_code_ready = observed_code_count >= CODE_STABILITY_POLLS
-
-            # ---------- STATUS STABILITY ----------
+            # ----- STABILITY: STATUS -----
             if status == observed_status:
                 observed_status_count += 1
             else:
                 observed_status = status
                 observed_status_count = 1
+            status_stable = observed_status_count >= STATUS_STABILITY_POLLS
 
-            stable_status_ready = observed_status_count >= STATUS_STABILITY_POLLS
-
-            # ---------- DECISION LOGIC ----------
+            # ----- DECISIONS -----
             with state_lock:
-                # Announce NEW LOBBY only if stable code and not recently announced
-                if stable_code_ready and code != last_code:
+                # NEW STABLE LOBBY (code change)
+                if code_stable and code != last_code:
                     if not code_recently_announced(code):
-                        safe_send_embed("🚀✅ NEW LOBBY LIVE!", code, lobby)
-                        last_code = code
-                        last_status = status
-                        remember_code_announcement(code)
-                        save_state()
+                        # delete previous message BEFORE sending
+                        if last_msg_id:
+                            print("🔁 New code → deleting previous message before posting")
+                            delete_message(last_msg_id)
+                            last_msg_id = None
+                        msg_id = send_embed_and_get_id("🚀✅ NEW LOBBY LIVE!", code, lobby)
+                        if msg_id:
+                            last_msg_id = msg_id
+                            last_code = code
+                            last_status = status
+                            remember_code_announcement(code)
+                            save_state()
                     else:
                         print(f"🔇 Suppressed repeat code {code} (within {REPEAT_CODE_SUPPRESS_SEC}s)")
                 else:
-                    # If same code, we may announce status changes — but only when status is stable
-                    if stable_status_ready and last_code == code and last_status != status:
+                    # Same code, status transition (only when stable)
+                    if status_stable and last_code == code and last_status != status:
+                        # ALWAYS delete previous message before posting the update
+                        if last_msg_id:
+                            print("🔁 Status change → deleting previous message before posting")
+                            delete_message(last_msg_id)
+                            last_msg_id = None
+
                         if last_status == "In Lobby" and status == "In Game":
-                            safe_send_embed("🟥 Game Started!", code, lobby, "I'll ping you when it ends.")
-                            last_status = status
-                            save_state()
+                            msg_id = send_embed_and_get_id("🟥 Game Started!", code, lobby, "I'll ping you when it ends.")
                         elif last_status == "In Game" and status == "In Lobby":
-                            safe_send_embed("🟩 Game Ended!", code, lobby, "You may join again.")
+                            msg_id = send_embed_and_get_id("🟩 Game Ended!", code, lobby, "You may join again.")
+                        else:
+                            # other status changes (rare), still post once
+                            msg_id = send_embed_and_get_id(f"ℹ Status: {status}", code, lobby)
+
+                        if msg_id:
+                            last_msg_id = msg_id
                             last_status = status
                             save_state()
 
@@ -292,12 +317,31 @@ def fetch_loop():
 
 
 # ==============================
+# OFFLINE WATCHDOG (20-min cleanup)
+# ==============================
+def offline_watchdog():
+    global last_msg_id, last_seen_host_ts
+    while True:
+        try:
+            now = time.time()
+            # If we have a message but haven't seen host lobby for OFFLINE_DELETE_SEC → delete
+            if last_msg_id and last_seen_host_ts and (now - last_seen_host_ts >= OFFLINE_DELETE_SEC):
+                print("⏱ Offline >20m → deleting last message")
+                delete_message(last_msg_id)
+                last_msg_id = None
+                save_state()
+        except Exception as e:
+            print("Watchdog error:", e)
+        time.sleep(60)  # check every minute
+
+
+# ==============================
 # KEEP ALIVE (Render)
 # ==============================
 def keep_alive():
     while True:
         try:
-            requests.get("https://amongus-autoping.onrender.com/", timeout=10)
+            requests.get(RENDER_URL, timeout=10)
             print("🔄 Keep-alive ping sent")
         except Exception as e:
             print("Keep-alive error:", e)
@@ -318,6 +362,7 @@ def home():
 def start_background():
     load_state()
     threading.Thread(target=fetch_loop, daemon=True).start()
+    threading.Thread(target=offline_watchdog, daemon=True).start()
     threading.Thread(target=keep_alive, daemon=True).start()
 
 
