@@ -23,9 +23,31 @@ HEADERS = {
     "Cookie": COOKIE_DATA
 }
 
-# anti-spam
-last_code = None
-last_status = None
+# ==============================
+# STATE FILE (ANTI-SPAM PERSISTENT)
+# ==============================
+STATE_FILE = "last_state.json"
+
+
+def load_state():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {"last_code": None, "last_status": None}
+    return {"last_code": None, "last_status": None}
+
+
+def save_state(code, status):
+    with open(STATE_FILE, "w") as f:
+        json.dump({"last_code": code, "last_status": status}, f)
+
+
+state = load_state()
+last_code = state["last_code"]
+last_status = state["last_status"]
+print("Loaded state:", state)
 
 
 # ==============================
@@ -124,25 +146,28 @@ def fetch_loop():
 
                 status = lobby.get("status")
 
-                # NEW LOBBY
+                # ✅ NEW LOBBY
                 if code != last_code:
                     send_embed("🚀✅ NEW LOBBY LIVE!", code, lobby)
                     last_code = code
                     last_status = status
+                    save_state(last_code, last_status)
                     print("✅ NEW LOBBY:", code)
                     continue
 
-                # GAME STARTED
+                # ✅ GAME STARTED
                 if last_status == "In Lobby" and status == "In Game":
                     send_embed("🟥 Game Started!", code, lobby, "I'll ping you when it ends.")
                     last_status = status
+                    save_state(last_code, last_status)
                     print("🎮 Game started")
                     continue
 
-                # GAME ENDED
+                # ✅ GAME ENDED
                 if last_status == "In Game" and status == "In Lobby":
                     send_embed("🟩 Game Ended!", code, lobby, "You may join again.")
                     last_status = status
+                    save_state(last_code, last_status)
                     print("✅ Game ended")
                     continue
 
@@ -163,8 +188,7 @@ def keep_alive():
             print("🔄 Keep-alive ping sent")
         except:
             pass
-
-        time.sleep(240)  # ping every 4 min
+        time.sleep(240)
 
 
 # ==============================
@@ -183,5 +207,4 @@ def start_background():
     threading.Thread(target=keep_alive, daemon=True).start()
 
 
-# ✅ Start on boot
 start_background()
