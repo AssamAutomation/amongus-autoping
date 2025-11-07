@@ -9,7 +9,7 @@ app = Flask(__name__)
 API_URL = "https://gurge44.pythonanywhere.com/get-all-lobbies-json"
 
 COOKIE_HEADER = {
-    "Cookie": os.getenv("COOKIE_STRING", "")
+    "Cookie": os.getenv("SITE_COOKIE", "")
 }
 
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK", "")
