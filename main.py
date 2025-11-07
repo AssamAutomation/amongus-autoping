@@ -55,10 +55,7 @@ def send_embed(event_title, code, lobby, extra_message=""):
         "image": {"url": banner_url},
         "fields": [
             {
-                "name": "🎮 JOIN CODE (Tap to Copy)",
-                "value": f"```\n{code}\n```",
-                "inline": False
-            },
+                "name": "🎮 JOIN CODE (Tap to Copy)", "value": lobby.get("host_name", "-"), "inline": True},
             {"name": "👤 Host", "value": lobby.get("host_name", "-"), "inline": True},
             {"name": "🌍 Server", "value": lobby.get("server_name", "-"), "inline": True},
             {"name": "👥 Players", "value": str(lobby.get("players", "-")), "inline": True},
