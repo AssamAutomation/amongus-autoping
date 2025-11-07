@@ -1,8 +1,8 @@
 import time
+import json
+import threading
 import requests
 import os
-import threading
-import json
 from flask import Flask
 
 app = Flask(__name__)
@@ -13,45 +13,45 @@ app = Flask(__name__)
 API_URL = "https://gurge44.pythonanywhere.com/get-all-lobbies-json"
 HOST_NAME = "ARIJIT18"
 
-WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
-COOKIE_VALUE = os.getenv("SITE_COOKIE")
+WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")       # Your webhook
+COOKIE_DATA = os.getenv("SITE_COOKIE")           # Cookie from browser
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
     "Accept": "application/json,text/plain,*/*",
     "Referer": "https://gurge44.pythonanywhere.com/lobbies",
-    "Cookie": COOKIE_VALUE
+    "Cookie": COOKIE_DATA
 }
 
+# Anti-spam cache
 last_code = None
 last_status = None
 
 
-# ===============================================================
-# ✅ DELETE MESSAGE AFTER 2 MINUTES (120s)
-# ===============================================================
-def delete_message_later(webhook_url, message_id):
-    time.sleep(120)
+# ==============================
+# ✅ AUTO DELETE MSG AFTER 2 MINS
+# ==============================
+def delete_message_later(webhook, msg_id):
+    time.sleep(120)  # 2 minutes
     try:
-        delete_url = webhook_url + f"/messages/{message_id}"
-        r = requests.delete(delete_url)
-        print(f"🗑️ Deleted message {message_id}: {r.status_code}")
-    except Exception as e:
-        print("Delete error:", e)
+        requests.delete(f"{webhook}/messages/{msg_id}")
+        print("🗑 Deleted old message:", msg_id)
+    except:
+        print("⚠ Could not delete message")
 
 
-# ===============================================================
-# ✅ SEND PREMIUM EMBED + AUTO-DELETE
-# ===============================================================
-def send_embed(event_title, code, lobby, extra_message="", color=0xF7E400):
+# ==============================
+# ✅ SEND PREMIUM EMBED
+# ==============================
+def send_embed(event_title, code, lobby, extra_message=""):
 
-    banner_url = "https://img.itch.zone/aW1hZ2UvMjU3Njc3LzYyNzc0MTkucG5n/original/oyM651.png"
-    thumbnail_url = "https://i.imgur.com/1V5ZQog.png"
+    banner_url = "https://alfabetajuega.com/hero/2021/01/among-us-1.jpg?width=768&aspect_ratio=16:9&format=nowebp"
+    thumb_url = "https://cdn.aptoide.com/imgs/d/4/6/d460a63e167a534bc7b9e4f1eaeed7dc_fgraphic.png"
 
     embed = {
-        "title": f"🚀 {event_title}",
-        "color": color,
-        "thumbnail": {"url": thumbnail_url},
+        "title": event_title,
+        "color": 0xF7E7A6,   # Light creamy yellow
+        "thumbnail": {"url": thumb_url},
         "image": {"url": banner_url},
         "fields": [
             {
@@ -67,8 +67,8 @@ def send_embed(event_title, code, lobby, extra_message="", color=0xF7E400):
             {"name": "💾 Version", "value": lobby.get("version", "-"), "inline": True},
         ],
         "footer": {
-            "text": "Among Us AutoPing • Made for ARIJIT18",
-            "icon_url": thumbnail_url
+            "text": "Among Us AutoPing • ARIJIT18 Host",
+            "icon_url": thumb_url
         }
     }
 
@@ -85,17 +85,11 @@ def send_embed(event_title, code, lobby, extra_message="", color=0xF7E400):
     }
 
     try:
-        # ✅ IMPORTANT → use wait=true so we receive message ID
         r = requests.post(WEBHOOK_URL + "?wait=true", json=payload)
         print("✅ Embed sent:", r.status_code)
 
         if r.status_code == 200:
-            data = r.json()
-            msg_id = data["id"]
-
-            print("💬 Message ID:", msg_id)
-
-            # ✅ Start delete timer thread
+            msg_id = r.json()["id"]
             threading.Thread(
                 target=delete_message_later,
                 args=(WEBHOOK_URL, msg_id),
@@ -103,93 +97,75 @@ def send_embed(event_title, code, lobby, extra_message="", color=0xF7E400):
             ).start()
 
     except Exception as e:
-        print("❌ Send error:", e)
+        print("❌ Webhook send error:", e)
 
 
-# ===============================================================
-# ✅ MAIN SCAN LOOP 24×7
-# ===============================================================
-def scan_loop():
+# ==============================
+# ✅ FETCH AND CHECK LOOP
+# ==============================
+def fetch_loop():
     global last_code, last_status
-
-    print("\n✅ AutoPing Started — Running 24×7\n")
 
     while True:
         try:
             r = requests.get(API_URL, headers=HEADERS, timeout=10)
             data = r.json()
+
+            # ✅ Check all lobbies, not just first
+            for code, lobby in data.items():
+
+                if lobby.get("host_name") != HOST_NAME:
+                    continue  # skip others
+
+                status = lobby.get("status")
+                players = lobby.get("players")
+
+                # ✅ NEW LOBBY FOUND
+                if code != last_code:
+                    send_embed("🚀✅ NEW LOBBY LIVE!", code, lobby)
+                    last_code = code
+                    last_status = status
+                    print("✅ NEW LOBBY:", code)
+                    break
+
+                # ✅ GAME STARTED
+                if last_status == "In Lobby" and status == "In Game":
+                    send_embed("🟥 Game Started!", code, lobby, "I'll ping you when it ends.")
+                    last_status = status
+                    print("🎮 Game started")
+                    break
+
+                # ✅ GAME ENDED → BACK TO LOBBY
+                if last_status == "In Game" and status == "In Lobby":
+                    send_embed("🟩 Game Ended!", code, lobby, "You may join again.")
+                    last_status = status
+                    print("✅ Game ended")
+                    break
+
+            time.sleep(5)
+
         except Exception as e:
             print("❌ Fetch error:", e)
             time.sleep(5)
-            continue
-
-        my_lobby = None
-        my_code = None
-
-        # ✅ Scan all lobbies
-        for code, info in data.items():
-            print(f"{code} | Host={info.get('host_name')} | Status={info.get('status')}")
-
-            if info.get("host_name") == HOST_NAME:
-                my_lobby = info
-                my_code = code
-
-        if not my_lobby:
-            print("❌ Your lobby not found.\n")
-            time.sleep(5)
-            continue
-
-        status = my_lobby.get("status")
-
-        # ✅ NEW CODE FOUND
-        if my_code != last_code:
-            last_code = my_code
-            last_status = status
-
-            send_embed(
-                "✅ NEW LOBBY LIVE!",
-                my_code,
-                my_lobby,
-                extra_message="Join quickly before it fills!",
-                color=0x00FF00  # green
-            )
-
-        # ✅ GAME START DETECTED
-        if last_status == "In Lobby" and status == "In Game":
-            last_status = "In Game"
-
-            send_embed(
-                "🎮 GAME STARTED!",
-                my_code,
-                my_lobby,
-                extra_message="I'll ping you when the game ends!",
-                color=0x3498DB  # blue
-            )
-
-        # ✅ GAME END DETECTED
-        if last_status == "In Game" and status == "In Lobby":
-            last_status = "In Lobby"
-
-            send_embed(
-                "🏁 GAME ENDED!",
-                my_code,
-                my_lobby,
-                extra_message="Players are back in the lobby!",
-                color=0xFF00FF  # purple
-            )
-
-        time.sleep(5)
 
 
-# ===============================================================
-# ✅ BACKGROUND THREAD + FLASK SERVER
-# ===============================================================
+# ==============================
+# ✅ FLASK ROOT ROUTE
+# ==============================
 @app.route("/")
 def home():
-    return "✅ AutoPing Premium Running 24×7"
+    return "✅ AutoPing is running..."
 
 
-threading.Thread(target=scan_loop, daemon=True).start()
+# ==============================
+# ✅ BACKGROUND THREAD
+# ==============================
+def start_background():
+    t = threading.Thread(target=fetch_loop, daemon=True)
+    t.start()
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+
+# ✅ Start thread on boot
+start_background()
+
+# Render runs app via gunicorn so we expose app
